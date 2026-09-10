@@ -59,12 +59,15 @@ def main():
 
     print("=" * 70)
     print("阶段1: 平台识别与中文字体栈")
-    check("主机平台识别为 Windows", mod.IS_WINDOWS and not mod.IS_MACOS,
-          f"win={mod.IS_WINDOWS} mac={mod.IS_MACOS}")
+    host = "Windows" if mod.IS_WINDOWS else ("macOS" if mod.IS_MACOS else "Linux")
+    check("主机平台可识别（win/mac/linux 三选一）",
+          sum([mod.IS_WINDOWS, mod.IS_MACOS, mod.IS_LINUX]) == 1, host)
     check("字体栈首选 MiSans（用户要求）", mod.FONT_STACK[0].startswith("MiSans"),
           mod.FONT_STACK[0])
-    check("Windows 字体栈含微软雅黑兜底", "Microsoft YaHei" in mod.FONT_STACK,
-          str(mod.FONT_STACK[:8]))
+    # 各平台的兜底字体不同：Windows 微软雅黑 / macOS 苹方 / Linux 思源
+    host_fallback = {"Windows": "Microsoft YaHei", "macOS": "PingFang SC", "Linux": "Noto Sans CJK SC"}[host]
+    check(f"主机字体栈含 {host} 兜底字体（{host_fallback}）",
+          host_fallback in mod.FONT_STACK, str(mod.FONT_STACK[:10]))
     check("CSS 字体栈含 sans-serif 兜底", mod.FONT_STACK_CSS.endswith("sans-serif"),
           mod.FONT_STACK_CSS)
     check("CSS 字体栈包含 MiSans", "MiSans" in mod.FONT_STACK_CSS, mod.FONT_STACK_CSS)
@@ -140,9 +143,13 @@ def main():
     check("无覆盖时默认便携模式（程序目录可写）",
           mod2.DATA_DIR == mod2.get_app_dir(), f"{mod2.DATA_DIR} mode={mod2.DATA_DIR_MODE}")
 
+    # 跨平台地模拟“程序目录不可写”：只对伪造的程序目录返回不可写，
+    # （不能用 Windows 盘符路径，那些路径在 macOS/Linux 上其实是可写的相对路径）
     real_get_app_dir = mod2.get_app_dir
-    fake_unwritable = Path("Z:/definitely_missing_drive_xyz/app")
-    mod2.get_app_dir = lambda: fake_unwritable          # 指向不可创建路径
+    real_is_writable = mod2._is_writable_dir
+    fake_unwritable = Path(tempfile.mkdtemp(prefix="tms_readonly_app_"))
+    mod2.get_app_dir = lambda: fake_unwritable
+    mod2._is_writable_dir = lambda p: False if Path(p) == fake_unwritable else real_is_writable(p)
     mod2.IS_MACOS, mod2.IS_WINDOWS = True, False        # 模拟 macOS
     resolved, mode = mod2.resolve_data_dir()
     expected = Path.home() / "Library" / "Application Support" / "TeachingManager"
@@ -150,7 +157,16 @@ def main():
           resolved == expected, f"resolved={resolved} expected={expected}")
     check("回退模式标注为用户数据目录", mode == "系统用户数据目录", mode)
     check("回退目录确实被创建/可用", resolved.exists(), str(resolved))
+
+    # 同样的逻辑在 Linux 上也应回退到 XDG 目录
+    mod2.IS_MACOS, mod2.IS_WINDOWS = False, False
+    resolved_lin, mode_lin = mod2.resolve_data_dir()
+    check("Linux 下程序目录不可写时回退用户数据目录",
+          resolved_lin != fake_unwritable and mode_lin == "系统用户数据目录",
+          f"resolved={resolved_lin} mode={mode_lin}")
+
     mod2.get_app_dir = real_get_app_dir
+    mod2._is_writable_dir = real_is_writable
 
     print("=" * 70)
     print("阶段3: 非 Windows 平台的 .doc 兼容提示")

@@ -45,8 +45,10 @@ def get_platform_font_stack() -> List[str]:
     """
     misans = ['MiSans', 'MiSans VF', 'MiSans Latin', 'MiSans Normal', 'MiSans Demibold']
     if IS_MACOS:
+        # macOS：苹方优先；若装过 Office 也可能有微软雅黑，作为最后兜底
         rest = ['PingFang SC', 'Hiragino Sans GB', 'Heiti SC', 'STHeiti',
-                'Songti SC', 'Arial Unicode MS', 'Helvetica Neue', 'DejaVu Sans']
+                'Songti SC', 'Microsoft YaHei', 'Arial Unicode MS',
+                'Helvetica Neue', 'DejaVu Sans']
     elif IS_WINDOWS:
         rest = ['PingFang SC', 'Microsoft YaHei', 'SimHei', 'Segoe UI',
                 'Arial Unicode MS', 'DejaVu Sans']
