@@ -154,9 +154,11 @@ def step_build(vpy: Path, src: Path, version: str, arch: str | None, sign: str |
         env["TMS_TARGET_ARCH"] = arch
     if sign:
         env["TMS_CODESIGN_IDENTITY"] = sign
+    # 注意：使用 .spec 文件时不能再传 --specpath（PyInstaller 会报
+    # "makespec options not valid when a .spec file is given"）
     run([vpy, "-m", "PyInstaller", "--noconfirm", "--clean",
          "--distpath", str(DIST), "--workpath", str(BUILD),
-         "--specpath", str(SPEC_DIR), str(SPEC_DIR / "TeachingManager.spec")],
+         str(SPEC_DIR / "TeachingManager.spec")],
         dry_run=dry_run, env=env)
     return DIST / f"{APP_NAME}.app"
 

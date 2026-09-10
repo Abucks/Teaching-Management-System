@@ -303,9 +303,13 @@ def main():
     # 6c docx
     st3 = mod.FileImporter.import_students_from_file(str(DATA / "students_sample.docx"))
     check("docx 学生读取>50", len(st3) > 50, f"n={len(st3)}")
-    # 6d xls
-    st4 = mod.FileImporter.import_students_from_file(str(DATA / "students_sample.xls"))
-    check("xls 学生读取>50", len(st4) > 50, f"n={len(st4)}")
+    # 6d xls（.xls 样例由 xlwt 生成；未安装 xlwt 时自动跳过，而不是让整轮测试失败）
+    xls_students = DATA / "students_sample.xls"
+    if xls_students.exists():
+        st4 = mod.FileImporter.import_students_from_file(str(xls_students))
+        check("xls 学生读取>50", len(st4) > 50, f"n={len(st4)}")
+    else:
+        print("  [SKIP] 未找到 students_sample.xls（安装 xlwt 后由 gen_data.py 生成），跳过 .xls 读取测试")
     # 6e 不支持格式
     bad = Path(workdir) / "x.txt"
     bad.write_text("abc", encoding="utf-8")
@@ -321,8 +325,12 @@ def main():
     check("xlsx 成绩字段", all('student_name' in g and 'score' in g and 'course_name' in g for g in gs[:5]))
     gs2 = mod.FileImporter.import_grades_from_file(str(DATA / "grades_sample.csv"))
     check("csv 成绩读取>100", len(gs2) > 100, f"n={len(gs2)}")
-    gs3 = mod.FileImporter.import_grades_from_file(str(DATA / "grades_sample.xls"))
-    check("xls 成绩读取>100", len(gs3) > 100, f"n={len(gs3)}")
+    gs3_path = DATA / "grades_sample.xls"
+    if gs3_path.exists():
+        gs3 = mod.FileImporter.import_grades_from_file(str(gs3_path))
+        check("xls 成绩读取>100", len(gs3) > 100, f"n={len(gs3)}")
+    else:
+        print("  [SKIP] 未找到 grades_sample.xls（安装 xlwt 后由 gen_data.py 生成），跳过 .xls 读取测试")
 
     print("=" * 70)
     print("阶段7.5: Excel 真实日期单元格/空日期单元格容错")
