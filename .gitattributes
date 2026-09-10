@@ -1,0 +1,26 @@
+# 统一换行与二进制标记，保证 macOS/Linux 上可执行脚本不被 CRLF 破坏
+* text=auto eol=lf
+
+*.sh    text eol=lf
+*.py    text eol=lf
+*.spec  text eol=lf
+*.yml   text eol=lf
+*.yaml  text eol=lf
+*.md    text eol=lf
+*.txt   text eol=lf
+.gitignore text eol=lf
+.gitattributes text eol=lf
+
+# 二进制文件（Git 不做换行转换）
+*.png  binary
+*.ico  binary
+*.icns binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.xls  binary
+*.xlsx binary
+*.docx binary
+*.db   binary
+*.dmg  binary
+*.exe  binary

@@ -1,0 +1,78 @@
+# ---------------------------------------------------------------------------
+# 三平台自动测试：逻辑层 / 界面（无头 offscreen）/ 跨平台与打包约束
+# 触发：push、PR、手动
+# ---------------------------------------------------------------------------
+name: Tests
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: ${{ matrix.os }} · Python ${{ matrix.python }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python: ['3.12']
+
+    env:
+      QT_QPA_PLATFORM: offscreen      # 无显示器环境跑 Qt 界面测试
+      PYTHONIOENCODING: utf-8
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 准备 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PySide6 matplotlib openpyxl python-docx xlrd pyyaml
+
+      - name: 生成样例数据
+        run: python tests/gen_data.py
+
+      - name: 逻辑层测试（89 项）
+        run: python tests/logic_test.py
+
+      - name: 界面 + 新功能测试（23 项，含游离顶层窗口回归）
+        run: python tests/gui_smoke.py
+
+      - name: 跨平台与打包约束测试
+        run: python tests/platform_test.py
+
+      - name: 校验 macOS CI 工作流
+        run: python packaging/macos/check_workflow.py
+
+      - name: 源码可编译
+        run: python -m py_compile teaching_manager.py
+
+  macos-package-check:
+    name: macOS 打包脚本自检（dry-run）
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PySide6 matplotlib openpyxl python-docx xlrd pyinstaller
+      - name: 生成图标
+        run: python packaging/macos/assets/make_icon.py
+      - name: dry-run 打包流程
+        working-directory: packaging/macos
+        run: python build_macos.py --skip-deps --dry-run

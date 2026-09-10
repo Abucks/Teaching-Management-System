@@ -1,0 +1,71 @@
+# ---------------------------------------------------------------------------
+# 在 GitHub 云端 macOS 机器上构建「教学管理系统」的 .app 与 .dmg
+#
+# 使用方法：
+#   本文件已位于 .github/workflows/ 下，可直接使用：
+#   在 Actions 页面手动 Run workflow，或推送 v* 标签自动触发
+#   3. 构建完成后在本次运行的 Artifacts 下载 DMG
+#
+# 产物：
+#   - macos-14（Apple Silicon，arm64）→ 教学管理系统-<版本>-macOS-arm64.dmg
+#   - macos-13（Intel，x86_64）      → 教学管理系统-<版本>-macOS-x86_64.dmg
+# ---------------------------------------------------------------------------
+name: Build macOS DMG
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+jobs:
+  build-macos:
+    name: Build DMG on ${{ matrix.runner }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-14      # Apple Silicon
+            arch: arm64
+            label: arm64
+          - runner: macos-13      # Intel
+            arch: x86_64
+            label: x86_64
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 准备 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: 安装依赖
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install PySide6 matplotlib openpyxl python-docx xlrd pyinstaller
+
+      - name: 构建 .app 与 DMG
+        working-directory: packaging/macos
+        run: |
+          python build_macos.py --skip-deps --arch ${{ matrix.arch }}
+
+      - name: 显示产物信息
+        working-directory: packaging/macos
+        run: |
+          ls -lh *.dmg dist/ || true
+          du -sh "dist/教学管理系统.app" || true
+          hdiutil verify *.dmg || true
+
+      - name: 上传 DMG
+        uses: actions/upload-artifact@v4
+        with:
+          name: 教学管理系统-macOS-${{ matrix.label }}
+          path: packaging/macos/*.dmg
+          if-no-files-found: error
+          retention-days: 30

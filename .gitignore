@@ -1,0 +1,41 @@
+# ---------- Python ----------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+
+# ---------- 打包产物 ----------
+build/
+dist/
+*.exe
+*.dmg
+*.app/
+*.pkg
+# Windows 打包自动生成的根目录 spec（macOS 的 spec 在 packaging/macos/ 需要保留）
+/TeachingManager.spec
+
+# ---------- 运行时/数据 ----------
+teaching_management.db
+teaching_management.db-shm
+teaching_management.db-wal
+config.json
+feedback_images/
+logs/
+*.log
+
+# ---------- 测试临时数据 ----------
+tests/testdata/
+tests/__pycache__/
+shots/*.png.tmp
+
+# ---------- 发布包 ----------
+*.zip
+
+# ---------- 编辑器 / 系统 ----------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

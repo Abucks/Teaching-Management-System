@@ -66,7 +66,7 @@
     方式1（推荐）：双击 exe 直接运行（首次启动解压需等待 10~30 秒）
     方式2：安装 Python 3.10+ 后
         pip install PySide6 matplotlib openpyxl python-docx xlrd
-        python deepseek_python_20260909_55c1d2.py
+        python teaching_manager.py
 
   【macOS】
     方式1：打开 DMG 安装包，把「教学管理系统」拖入 应用程序(Applications)。
@@ -74,9 +74,9 @@
         或执行 xattr -dr com.apple.quarantine "/Applications/教学管理系统.app"
     方式2：安装 Python 3.10+ 后（终端）
         pip install PySide6 matplotlib openpyxl python-docx xlrd
-        python3 deepseek_python_20260909_55c1d2.py
+        python3 teaching_manager.py
     说明：DMG 必须在 Mac 上生成（PyInstaller 不支持跨平台编译）。
-        打包目录 test_teaching_app/packaging/macos/ —— 在 Mac 上执行
+        打包目录 packaging/macos/ —— 在 Mac 上执行
         ./build_macos.sh 一键产出 .app 与 .dmg；详见其中 README-macOS.md。
 
 四、数据文件说明（跨平台自动定位）
