@@ -2,8 +2,8 @@
 # 在 GitHub 云端 macOS 机器上构建「教学管理系统」的 .app 与 .dmg
 #
 # 使用方法：
-#   1. 把本文件复制到仓库的 .github/workflows/build-macos.yml
-#   2. 在 Actions 页面手动 Run workflow，或推送 v* 标签自动触发
+#   本文件已位于 .github/workflows/ 下，可直接使用：
+#   在 Actions 页面手动 Run workflow，或推送 v* 标签自动触发
 #   3. 构建完成后在本次运行的 Artifacts 下载 DMG
 #
 # 产物：
@@ -29,10 +29,13 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: macos-14      # Apple Silicon
+          - runner: macos-14          # Apple Silicon (arm64)
             arch: arm64
             label: arm64
-          - runner: macos-13      # Intel
+          # macOS 13 镜像已停止支持（2025-12-04 起不再提供），
+          # Intel 构建改用新的 macOS 15 Intel 镜像；若该标签不可用，
+          # 可改回 macos-13 或删除本项只构建 arm64。
+          - runner: macos-15-intel    # Intel (x86_64)
             arch: x86_64
             label: x86_64
 

@@ -30,8 +30,11 @@ labels = [m.get("label") for m in matrix]
 archs = [m.get("arch") for m in matrix]
 ok(labels == ["arm64", "x86_64"], "矩阵含 arm64 + x86_64", str(labels))
 ok(archs == ["arm64", "x86_64"], "架构参数正确", str(archs))
-ok([m.get("runner") for m in matrix] == ["macos-14", "macos-13"], "runner 版本正确",
-   str([m.get("runner") for m in matrix]))
+runners = [m.get("runner") for m in matrix]
+ok(runners[0] == "macos-14", "Apple Silicon 使用 macos-14", str(runners))
+# macOS 13 镜像已停止支持，Intel 应使用 macos-15-intel（或其它可用 Intel 镜像）
+ok(runners[1] != "macos-13" and "intel" in runners[1].lower(),
+   "Intel 构建不再使用已停服的 macos-13", str(runners))
 
 steps = job.get("steps", [])
 names = [s.get("name", "") for s in steps]
