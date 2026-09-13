@@ -1,8 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  WiX v4/v5 安装包定义：生成 Windows MSI
+  WiX v5 安装包定义（可选方案）：生成 Windows MSI
   由 GitHub Actions 的 build-installers 工作流调用：
     wix build packaging/windows/installer.wxs -d SourceExe=<exe路径> -d AppVersion=1.4.0 -o <输出.msi>
+
+  ⚠️ 注意：`dotnet tool install --global wix` 现在会装到 v7，而 v7 要求接受
+  Open Source Maintenance Fee (OSMF) EULA，CI 上会报 WIX7015 而失败。
+  如需使用本文件，请显式锁定 v5：
+      dotnet tool install --global wix --version 5.*
+  项目的默认方案是用 Python 标准库的 packaging/windows/build_msi.py 生成 MSI。
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
   <Package

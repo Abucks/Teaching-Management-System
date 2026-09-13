@@ -79,19 +79,20 @@ jobs:
                   "$root\packaging\windows\installer.iss"
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup 编译失败" }
 
-      - name: 构建 MSI（WiX Toolset v5）
+      - name: 构建 MSI（Python 标准库 msilib）
         shell: pwsh
         run: |
-          dotnet tool install --global wix | Out-Null
-          $wix = "$env:USERPROFILE\.dotnet\tools\wix.exe"
+          # 不用 WiX：`dotnet tool install wix` 会装到 v7，而 v7 要求接受 OSMF EULA，
+          # CI 上直接报 WIX7015。msilib 是 Windows Installer 的标准库封装，
+          # 零依赖、无授权问题（需要 Python ≤ 3.12，msilib 在 3.13 被移除）。
           $root = (Get-Location).Path
           New-Item -ItemType Directory -Force "$root\dist\installers" | Out-Null
-          & $wix build "$root\packaging\windows\installer.wxs" `
-              -arch x64 `
-              -d "SourceExe=$root\dist\TeachingManager.exe" `
-              -d "AppVersion=${{ needs.meta.outputs.version }}" `
-              -o "$root\dist\installers\TeachingManager-${{ needs.meta.outputs.version }}-windows-x64-${{ needs.meta.outputs.stamp }}.msi"
-          if ($LASTEXITCODE -ne 0) { throw "WiX 构建失败" }
+          python packaging\windows\build_msi.py `
+            "$root\dist\TeachingManager.exe" `
+            "$root\dist\installers\TeachingManager-${{ needs.meta.outputs.version }}-windows-x64-${{ needs.meta.outputs.stamp }}.msi" `
+            "${{ needs.meta.outputs.version }}" `
+            "$root\packaging\macos\assets\icon.ico"
+          if ($LASTEXITCODE -ne 0) { throw "MSI 构建失败" }
 
       - name: 重命名便携版（带版本与时间戳）
         shell: pwsh
