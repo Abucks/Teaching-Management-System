@@ -45,6 +45,8 @@ jobs:
   windows:
     needs: meta
     runs-on: windows-latest
+    env:
+      PYTHONIOENCODING: utf-8        # 避免中文输出在 cp1252 控制台上报 UnicodeEncodeError
     steps:
       - uses: actions/checkout@v4
 

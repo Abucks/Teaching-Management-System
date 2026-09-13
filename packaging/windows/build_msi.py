@@ -133,6 +133,14 @@ def build(exe_path: str, out_msi: str, version: str, icon_path: str | None = Non
 
 
 def main(argv: list[str]) -> int:
+    # CI（Windows Runner）控制台默认是 cp1252，直接打印中文会抛 UnicodeEncodeError
+    # 并让构建"看起来失败"；这里统一把标准输出改成 UTF-8 容错模式。
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")   # type: ignore[attr-defined]
+        except Exception:
+            pass
+
     if len(argv) < 4:
         print(__doc__)
         return 2
