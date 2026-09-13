@@ -200,7 +200,7 @@ def main():
           "setApplicationDisplayName" in SOURCE and "setOrganizationDomain" in SOURCE)
     check("窗口定位使用可用区域（避开菜单栏/程序坞）", "availableGeometry()" in SOURCE)
     check("数据目录可在应用内打开", "open_data_dir" in SOURCE and "QDesktopServices" in SOURCE)
-    check("版本号已升到 1.3.1", mod.APP_VERSION == "1.3.1", mod.APP_VERSION)
+    check("版本号已升到 1.4.0", mod.APP_VERSION == "1.4.0", mod.APP_VERSION)
     check("Bundle ID 常量存在（macOS 打包用）",
           re.fullmatch(r"[a-zA-Z0-9.\-]+", mod.APP_BUNDLE_ID) is not None, mod.APP_BUNDLE_ID)
 
@@ -240,6 +240,34 @@ def main():
           and "def extend_context_menu" in SOURCE and "self.edit_btn" in SOURCE)
     check("成绩磁贴可编辑（学生成绩编辑对话框）",
           "class StudentGradeEditDialog" in SOURCE and "def edit_student_grades" in SOURCE)
+
+    print("=" * 70)
+    print("阶段5.5: v1.4.0 新功能在源码中的落点")
+    check("学生资料气泡页（点开磁贴 → tag cloud）",
+          "class StudentProfileView" in SOURCE and "class BubbleCloud" in SOURCE
+          and "class BubbleItem" in SOURCE and "class FlowLayout" in SOURCE)
+    check("气泡大小分档（或大或小）",
+          "SIZE_CLASSES" in SOURCE and "'xl'" in SOURCE and "'xs'" in SOURCE)
+    check("单击学生磁贴进入资料页并记入导航历史",
+          "def on_student_clicked" in SOURCE and "self.navigate('student'" in SOURCE
+          and "def open_student_profile" in SOURCE)
+    check("资料页进入面包屑（含学生名）",
+          "if kind == 'student':" in SOURCE and "👤 {stu.name}" in SOURCE)
+    check("学情管理模块（自动读取名单 + 自由字段）",
+          "class StudentProfileModule" in SOURCE and "def add_field" in SOURCE
+          and "def rename_field" in SOURCE and "def delete_field" in SOURCE
+          and "def export_excel" in SOURCE)
+    check("学情数据表（profile_fields / profile_values）",
+          "CREATE TABLE IF NOT EXISTS profile_fields" in SOURCE
+          and "CREATE TABLE IF NOT EXISTS profile_values" in SOURCE)
+    check("学情数据与学生管理隔离（不在磁贴/气泡中读取）",
+          "get_student_profile" in SOURCE
+          and "get_student_profile" not in SOURCE.split("class StudentTile")[1].split("class ")[0]
+          and "profile_values" not in SOURCE.split("class StudentProfileView")[1].split("class StudentProfileModule")[0])
+    check("学情模块已接入主窗口（第 5 个模块）",
+          '("📋", "学情管理", 4)' in SOURCE and "self.profile_module" in SOURCE)
+    check("Excel 空单元格容错（避免字符串 'None'）",
+          "def _cell_text" in SOURCE and "text == 'None'" in SOURCE)
 
     print("=" * 70)
     print("阶段6: 防“多开多个程序窗口”闪烁的源码约束")

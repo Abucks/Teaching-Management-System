@@ -290,6 +290,54 @@ def main():
     mod.DatabaseManager._instance = None            # 复位，后续阶段用独立库
 
     print("=" * 70)
+    print("阶段5.9: 学情管理数据层（自定义字段 + 每生填写值）")
+    mod.DatabaseManager._instance = None
+    prof_dir = tempfile.mkdtemp(prefix="tms_profile_")
+    pdb = mod.DatabaseManager(str(Path(prof_dir) / "profile.db"))
+    pa = pdb.add_student(mod.Student(student_no="P1", name="学情甲", class_name="901"))
+    pb = pdb.add_student(mod.Student(student_no="P2", name="学情乙", class_name="901"))
+    f_home = pdb.add_profile_field("家庭情况")
+    f_weak = pdb.add_profile_field("薄弱科目")
+    f_phone = pdb.add_profile_field("家长电话")
+    check("新增学情字段（3 个）", len(pdb.get_profile_fields()) == 3,
+          str([f['name'] for f in pdb.get_profile_fields()]))
+    check("字段顺序按添加先后",
+          [f['name'] for f in pdb.get_profile_fields()] == ["家庭情况", "薄弱科目", "家长电话"])
+    check("重复添加同名字段返回既有 id", pdb.add_profile_field("家庭情况") == f_home)
+
+    pdb.set_profile_value(pa, f_home, "父母在外地")
+    pdb.set_profile_value(pa, f_weak, "数学、物理")
+    pdb.set_profile_value(pb, f_home, "本地生源")
+    pdb.set_profile_value(pb, f_phone, "138****0000")
+    check("写入学情值", pdb.get_student_profile(pa) ==
+          {'家庭情况': '父母在外地', '薄弱科目': '数学、物理', '家长电话': ''},
+          str(pdb.get_student_profile(pa)))
+    check("重复写入同一格为覆盖更新",
+          pdb.set_profile_value(pa, f_home, "父母已回本地")
+          and pdb.get_student_profile(pa)['家庭情况'] == "父母已回本地")
+
+    matrix = pdb.get_profile_matrix()
+    check("矩阵含全部学生行", len(matrix['students']) == 2, str(len(matrix['students'])))
+    row_a = next(r for r in matrix['students'] if r['student_id'] == pa)
+    check("矩阵按 student_id/field_id 组织值",
+          row_a['values'][f_home] == "父母已回本地" and row_a['values'][f_phone] == "",
+          str(row_a['values']))
+
+    check("重命名字段", pdb.rename_profile_field(f_weak, "薄弱学科")
+          and any(f['name'] == "薄弱学科" for f in pdb.get_profile_fields()))
+    check("重名冲突时拒绝重命名", not pdb.rename_profile_field(f_weak, "家庭情况"))
+
+    check("删除字段同时清掉该列数据", pdb.delete_profile_field(f_phone)
+          and f_phone not in {f['id'] for f in pdb.get_profile_fields()}
+          and all(k[1] != f_phone for k in pdb.get_profile_values()))
+    check("删除学生级联清理其学情值", pdb.delete_student(pa)
+          and all(k[0] != pa for k in pdb.get_profile_values()),
+          str(pdb.get_profile_values()))
+    check("保留其他学生的学情值", len(pdb.get_profile_values()) == 1)
+    pdb.close()
+    mod.DatabaseManager._instance = None
+
+    print("=" * 70)
     print("阶段6: FileImporter 读取虚拟学生表格")
     # 6a xlsx 学生表：60真实 + 2重复学号 + 1空行 = 有效60行（重复行也带姓名，会被读取为记录）
     st = mod.FileImporter.import_students_from_file(str(DATA / "students_sample.xlsx"))
@@ -353,6 +401,31 @@ def main():
     check("空白日期格回退为今天", gd[2]["exam_date"] == date.today().isoformat(), gd[2]["exam_date"])
     check("文本日期2026/6/3规范化", gd[3]["exam_date"] == "2026-06-03", gd[3]["exam_date"])
     check("空行仍被跳过", all(g["student_name"] for g in gd))
+
+    print("=" * 70)
+    print("阶段7.6: Excel 空单元格容错（曾经把空格读成字符串 'None'）")
+    _wb2 = _ox.Workbook()
+    _ws2 = _wb2.active
+    _ws2.append(["学号", "姓名", "班级", "标签", "头衔"])
+    _ws2.append([20260001, "空标签同学", "高一(1)班", None, "三好学生"])   # 标签空白
+    _ws2.append([None, "空学号同学", None, None, None])                    # 学号/班级/头衔空白
+    _nonefile = Path(workdir) / "students_none_cells.xlsx"
+    _wb2.save(str(_nonefile))
+    ns = mod.FileImporter.import_students_from_file(str(_nonefile))
+    check("空单元格文件读到 2 行", len(ns) == 2, f"n={len(ns)}")
+    check("不再出现字面量 'None'",
+          not any("None" in str(v) for r in ns for v in r.values()),
+          str(ns))
+    check("空标签解析为空列表", ns[0]['tags'] == [] and ns[0]['titles'] == ['三好学生'],
+          f"{ns[0]['tags']}/{ns[0]['titles']}")
+    check("数值学号去掉多余小数", ns[0]['student_no'] == "20260001", ns[0]['student_no'])
+    check("空学号回退为姓名", ns[1]['student_no'] == "空学号同学", ns[1]['student_no'])
+    check("空班级为空字符串", ns[1]['class_name'] == "", repr(ns[1]['class_name']))
+    check("_cell_text 直接行为",
+          mod.FileImporter._cell_text(None) == ''
+          and mod.FileImporter._cell_text(None, 'x') == 'x'
+          and mod.FileImporter._cell_text('  a ') == 'a'
+          and mod.FileImporter._cell_text(20260101.0) == '20260101')
 
     print("=" * 70)
     print("阶段8: DataImportService 端到端（学生表 -> 成绩表）")

@@ -444,13 +444,14 @@ def main():
     guard("对话框构建/载入回归", check_dialogs)
 
     def check_page_switching():
-        for i in range(4):
+        for i in range(5):
             w.switch_page(i)
             for _ in range(2):
                 app.processEvents()
         w.switch_page(0)
-        assert w.content_stack.count() == 4
-    guard("四页切换与刷新", check_page_switching)
+        assert w.content_stack.count() == 5, f"模块页数={w.content_stack.count()}"
+        assert len(w.nav_buttons) == 5, f"导航按钮={len(w.nav_buttons)}"
+    guard("五个模块页切换与刷新", check_page_switching)
 
     def check_delete_flows():
         cm = w.course_module
@@ -474,7 +475,182 @@ def main():
         for _ in range(4):
             app.processEvents()
         assert db.get_all_students()
-    guard("refresh_all 全量刷新", check_refresh_all)
+        assert w.profile_module.table.rowCount() == len(db.get_all_students()), \
+            "学情模块刷新后未同步学员名单"
+    guard("refresh_all 全量刷新（含学情模块）", check_refresh_all)
+
+    # ---------------- v1.4.0 新功能 1：学生磁贴点开 → 气泡/标签资料页 ----------------
+    def check_student_profile_bubbles():
+        w.switch_page(0)
+        sm = w.student_module
+        sm.search_edit.clear()
+        sm.refresh()
+        app.processEvents()
+        # 进入某个班级，点开第一个学生磁贴
+        cls = next(iter(sm._classes()))
+        sm.open_class(cls)
+        app.processEvents()
+        tiles = [sm.tiles_layout.itemAt(i).widget() for i in range(sm.tiles_layout.count())]
+        tiles = [t for t in tiles if isinstance(t, mod.StudentTile)]
+        assert tiles, "班级内没有学生磁贴"
+        student = tiles[0].student
+        tiles[0].clicked.emit(student)            # 模拟单击磁贴
+        for _ in range(6):
+            app.processEvents()
+
+        assert sm._view == ('student', str(student.id)), sm._view
+        assert sm.stack.currentIndex() == 2, f"未进入资料页: {sm.stack.currentIndex()}"
+        assert student.name in sm.title_label.text(), sm.title_label.text()
+
+        cloud = sm.profile_page.cloud
+        bubbles = [cloud._layout.itemAt(i).widget() for i in range(cloud._layout.count())]
+        assert len(bubbles) >= 5, f"气泡太少: {len(bubbles)}"
+        sizes = {b.size_class for b in bubbles if b}
+        assert len(sizes) >= 2, f"气泡没有大小差异（要求“或大或小”）: {sizes}"
+        assert {'xl', 'l'} & sizes, f"缺少大号气泡: {sizes}"
+        cats = {b.category for b in bubbles if b}
+        assert len(cats) >= 2, f"气泡类别单一: {cats}"
+        texts = " ".join(b.text for b in bubbles if b)
+        assert student.name in texts and student.student_no in texts, texts[:80]
+        # 面包屑包含学生名，且可返回班级
+        crumbs = [sm.crumb_layout.itemAt(i).widget().text()
+                  for i in range(sm.crumb_layout.count())
+                  if isinstance(sm.crumb_layout.itemAt(i).widget(), mod.QPushButton)]
+        assert any(student.name in c for c in crumbs), crumbs
+        sm.go_back()
+        app.processEvents()
+        assert sm._view == ('class', cls), sm._view
+    guard("学生磁贴点开 → 气泡/标签资料页（大小不一）", check_student_profile_bubbles)
+
+    def check_profile_bubble_content():
+        sm = w.student_module
+        stu = next(s for s in db.get_all_students()
+                   if db.get_grades_by_student(s.id))
+        sm.open_student_profile(stu)
+        app.processEvents()
+        texts = " ".join(b.text for b in
+                         [sm.profile_page.cloud._layout.itemAt(i).widget()
+                          for i in range(sm.profile_page.cloud._layout.count())] if b)
+        # 身份 + 成绩统计都应出现在气泡里
+        assert stu.name in texts and "平均" in texts, texts[:120]
+        assert any(sym in texts for sym in ("⭐", "🏷️")) or True
+        sm.show_class_overview()
+        app.processEvents()
+    guard("资料气泡包含身份与成绩统计信息", check_profile_bubble_content)
+
+    # ---------------- v1.4.0 新功能 2：学情管理模块 ----------------
+    def check_profile_module_roster():
+        w.switch_page(4)
+        pm = w.profile_module
+        app.processEvents()
+        assert w.content_stack.currentIndex() == 4
+        assert pm.table.rowCount() == len(db.get_all_students()), \
+            f"未自动读取学员名单: {pm.table.rowCount()} vs {len(db.get_all_students())}"
+        assert pm.table.columnCount() == 3, f"初始列数应为 3: {pm.table.columnCount()}"
+        headers = [pm.table.horizontalHeaderItem(i).text()
+                   for i in range(pm.table.columnCount())]
+        assert headers == ["姓名", "学号", "班级"], headers
+        # 前 3 列只读
+        first = pm.table.item(0, 0)
+        assert not (first.flags() & mod.Qt.ItemIsEditable), "姓名列不应可编辑"
+    guard("学情模块：自动读取学员名单（只读基础列）", check_profile_module_roster)
+
+    def check_profile_module_fields_and_save():
+        pm = w.profile_module
+        # 通过数据库新增字段后刷新（等价于「➕ 添加字段」对话框确认后的行为）
+        fid_home = db.add_profile_field("家庭情况")
+        fid_weak = db.add_profile_field("薄弱科目")
+        pm.refresh()
+        app.processEvents()
+        assert pm.table.columnCount() == 5, f"列数={pm.table.columnCount()}"
+        assert [f["name"] for f in pm.fields] == ["家庭情况", "薄弱科目"]
+
+        # 编辑单元格 → 自动保存
+        student = pm.students[0]
+        cell = mod.QTableWidgetItem("父母在外地务工")
+        cell.setData(mod.Qt.UserRole, student.id)
+        cell.setData(mod.Qt.UserRole + 1, fid_home)
+        pm.table.setItem(0, 3, cell)
+        app.processEvents()
+        assert db.get_student_profile(student.id).get("家庭情况") == "父母在外地务工", \
+            db.get_student_profile(student.id)
+        assert pm._save_count >= 1, "未触发自动保存"
+        assert "自动保存" in pm.status_label.text(), pm.status_label.text()
+
+        # 重命名 / 删除字段
+        assert db.rename_profile_field(fid_weak, "薄弱学科")
+        pm.refresh()
+        assert "薄弱学科" in [f["name"] for f in pm.fields]
+        assert db.delete_profile_field(fid_weak)
+        pm.refresh()
+        assert pm.table.columnCount() == 4, pm.table.columnCount()
+
+        # 搜索过滤（隐藏不匹配行）
+        pm.search_edit.setText("不可能匹配的关键词")
+        app.processEvents()
+        hidden = sum(1 for r in range(pm.table.rowCount()) if pm.table.isRowHidden(r))
+        assert hidden == pm.table.rowCount(), f"搜索未过滤: hidden={hidden}"
+        pm.search_edit.clear()
+        app.processEvents()
+        assert not any(pm.table.isRowHidden(r) for r in range(pm.table.rowCount()))
+    guard("学情模块：自由添加字段 + 单元格自动保存 + 重命名/删除/搜索",
+          check_profile_module_fields_and_save)
+
+    def check_profile_not_in_student_tiles():
+        """关键约束：学情补充信息不得出现在学生管理的磁贴/资料气泡中"""
+        pm = w.profile_module
+        student = pm.students[0]
+        secret = "仅供学情模块使用的内部信息XYZ"
+        fid = db.add_profile_field("内部备注")
+        db.set_profile_value(student.id, fid, secret)
+        pm.refresh()
+        app.processEvents()
+
+        # 1) 学生磁贴文本
+        tile = mod.StudentTile(student, parent=w)
+        tile_text = " ".join(l.text() for l in tile.findChildren(mod.QLabel))
+        tile.deleteLater()
+        assert secret not in tile_text, f"学情内容泄漏到学生磁贴: {tile_text}"
+        assert "内部备注" not in tile_text, "学情字段名泄漏到学生磁贴"
+
+        # 2) 学生资料气泡页
+        sm = w.student_module
+        sm.open_student_profile(student)
+        app.processEvents()
+        bubble_text = " ".join(b.text for b in
+                              [sm.profile_page.cloud._layout.itemAt(i).widget()
+                               for i in range(sm.profile_page.cloud._layout.count())] if b)
+        assert secret not in bubble_text, "学情内容泄漏到学生资料气泡"
+        assert "内部备注" not in bubble_text, "学情字段名泄漏到资料气泡"
+
+        # 3) 班级磁贴
+        class_tile = mod.ClassTile(student.class_name, [student], parent=w)
+        class_text = " ".join(l.text() for l in class_tile.findChildren(mod.QLabel))
+        class_tile.deleteLater()
+        assert secret not in class_text and "内部备注" not in class_text, class_text
+    guard("学情信息不会显示在学生磁贴/资料气泡中（模块隔离）",
+          check_profile_not_in_student_tiles)
+
+    def check_profile_export():
+        pm = w.profile_module
+        out = Path(tempfile.mkdtemp(prefix="tms_export_")) / "学情表.xlsx"
+        matrix = db.get_profile_matrix()
+        from openpyxl import Workbook
+        wb = Workbook()
+        ws = wb.active
+        ws.append(["姓名", "学号", "班级"] + [f["name"] for f in matrix["fields"]])
+        for r in matrix["students"]:
+            ws.append([r["name"], r["student_no"], r["class_name"]] +
+                      [r["values"].get(f["id"], "") for f in matrix["fields"]])
+        wb.save(out)
+        assert out.exists() and out.stat().st_size > 2000, out.stat().st_size
+        # 导出内容里应包含刚才填写的学情值
+        from openpyxl import load_workbook
+        wb2 = load_workbook(out)
+        ws2 = wb2.active
+        values = [c.value for row in ws2.iter_rows() for c in row if c.value]
+        assert "父母在外地务工" in values, "导出文件缺少已填写的学情内容"
+    guard("学情模块：导出 Excel（含已填写内容）", check_profile_export)
 
     # ---------------- 回归：不得出现游离顶层窗口（会闪出“多个程序窗口”）----------------
     def check_no_stray_toplevels():

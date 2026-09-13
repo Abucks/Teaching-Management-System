@@ -166,6 +166,44 @@ for _ in range(8):
     app.processEvents()
 shoot("5_成绩_统计与个人报告")
 
+# 6) v1.4.0：点开学生磁贴 → 气泡/标签资料页
+w.switch_page(0)
+sm.refresh()
+first_class = next(iter(sm._classes()))
+sm.open_class(first_class)
+wait(600)
+sm.stack._settle()
+candidates = [t for t in (sm.tiles_layout.itemAt(i).widget()
+                          for i in range(sm.tiles_layout.count()))
+              if isinstance(t, mod.StudentTile)]
+# 挑一个成绩记录较多的学生，气泡更丰富
+candidates.sort(key=lambda t: -len(db.get_grades_by_student(t.student.id or 0)))
+if candidates:
+    sm.open_student_profile(candidates[0].student)
+    wait(700)
+    sm.stack._settle()
+    bubbles = sm.profile_page.cloud._layout.count()
+    print(f"  资料页学生={candidates[0].student.name} 气泡数={bubbles} "
+          f"页索引={sm.stack.currentIndex()}")
+    shoot("6_学生资料_信息气泡")
+
+# 7) v1.4.0：学情管理（自动读取名单 + 自由字段）
+w.switch_page(4)
+pm = w.profile_module
+for fname, samples in (
+        ("家庭情况", ["父母在外地务工", "本地生源，走读", "单亲，跟外婆住", "父母均为教师"]),
+        ("薄弱科目", ["数学、物理", "英语", "化学", "语文作文"]),
+        ("学习习惯", ["晚自习效率高", "需督促交作业", "喜欢提问", "笔记整洁"]),
+        ("家长电话", ["138****0001", "139****0002", "137****0003", "136****0004"]),
+):
+    fid = db.add_profile_field(fname)
+    for i, stu in enumerate(pm.students[:4] if pm.students else []):
+        db.set_profile_value(stu.id, fid, samples[i % len(samples)])
+pm.refresh()
+wait(300)
+print(f"  学情表 {pm.table.rowCount()} 行 x {pm.table.columnCount()} 列")
+shoot("7_学情管理_自由填表")
+
 w.close()
 db.close()
 print("screenshots ->", OUT)

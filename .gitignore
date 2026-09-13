@@ -28,6 +28,8 @@ logs/
 # ---------- 测试临时数据 ----------
 tests/testdata/
 tests/__pycache__/
+# 截图中间产物（正式截图放 docs/screenshots/）
+tests/shots/
 shots/*.png.tmp
 
 # ---------- 发布包 ----------

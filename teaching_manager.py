@@ -230,6 +230,7 @@ try:
         QGraphicsView, QGraphicsScene, QGraphicsRectItem, QGraphicsTextItem,
         QGraphicsItem, QToolBar, QMenu, QTabWidget, QSplitter, QGroupBox,
         QFormLayout, QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
+        QLayout, QWidgetItem,
         QCheckBox, QRadioButton, QButtonGroup, QListWidget, QListWidgetItem,
         QColorDialog, QInputDialog, QProgressBar, QStatusBar, QSlider, QToolButton,
         QStyle, QStyleFactory, QGraphicsDropShadowEffect, QGraphicsOpacityEffect,
@@ -316,7 +317,7 @@ import calendar
 
 # ==================== 常量与配置 ====================
 APP_NAME = "教学管理系统"
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.4.0"
 APP_BUNDLE_ID = "com.teaching.manager"
 # 跨平台数据目录：便携模式落在程序目录；.app 只读时自动落到用户数据目录
 DB_PATH = DATA_DIR / "teaching_management.db"
@@ -679,12 +680,34 @@ class DatabaseManager:
                 )
             ''')
 
+            # ---- 学情管理（v1.4.0）：自定义字段 + 每个学生的填写值 ----
+            # 说明：学情数据只在本模块使用，**不会**出现在学生管理的磁贴/资料气泡里
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS profile_fields (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    position INTEGER DEFAULT 0,
+                    created_at TEXT DEFAULT ''
+                )
+            ''')
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS profile_values (
+                    student_id INTEGER NOT NULL,
+                    field_id INTEGER NOT NULL,
+                    value TEXT DEFAULT '',
+                    updated_at TEXT DEFAULT '',
+                    PRIMARY KEY (student_id, field_id)
+                )
+            ''')
+
             # 创建索引
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_students_name ON students(name)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_courses_date ON courses(course_date)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_feedbacks_date ON feedbacks(date)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_grades_student ON grades(student_id)')
             cursor.execute('CREATE INDEX IF NOT EXISTS idx_grades_course ON grades(course_name)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_profile_values_student '
+                           'ON profile_values(student_id)')
 
             # ---- 老版本数据库自动迁移（v1.3.0 便签新增字段）----
             self._migrate_schema(cursor)
@@ -749,10 +772,11 @@ class DatabaseManager:
             return cursor.rowcount > 0
 
     def delete_student(self, student_id: int) -> bool:
-        """删除学生"""
+        """删除学生（同时清理其学情填写值，避免残留脏数据）"""
         with self._lock:
             conn = self._get_connection()
             cursor = conn.cursor()
+            cursor.execute('DELETE FROM profile_values WHERE student_id=?', (student_id,))
             cursor.execute('DELETE FROM students WHERE id=?', (student_id,))
             conn.commit()
             return cursor.rowcount > 0
@@ -789,6 +813,113 @@ class DatabaseManager:
             ''', (like, like, like))
             rows = cursor.fetchall()
             return [Student.from_dict(dict(row)) for row in rows]
+
+    # ---- 学情管理（自定义字段 + 每个学生的填写值）----
+    def get_profile_fields(self) -> List[Dict[str, Any]]:
+        """学情表格的自定义列（按 position 排序）"""
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT id, name, position FROM profile_fields '
+                           'ORDER BY position, id')
+            return [{'id': r[0], 'name': r[1], 'position': r[2]} for r in cursor.fetchall()]
+
+    def add_profile_field(self, name: str) -> Optional[int]:
+        """新增学情字段（列）。已存在同名则返回其 id"""
+        name = (name or '').strip()
+        if not name:
+            return None
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT id FROM profile_fields WHERE name=?', (name,))
+            row = cursor.fetchone()
+            if row:
+                return row[0]
+            cursor.execute('SELECT COALESCE(MAX(position), 0) + 1 FROM profile_fields')
+            pos = cursor.fetchone()[0]
+            cursor.execute('INSERT INTO profile_fields (name, position, created_at) '
+                           'VALUES (?, ?, ?)', (name, pos, datetime.now().isoformat()))
+            conn.commit()
+            return cursor.lastrowid
+
+    def rename_profile_field(self, field_id: int, new_name: str) -> bool:
+        """重命名字段；若新名称已被占用则返回 False"""
+        new_name = (new_name or '').strip()
+        if not new_name:
+            return False
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT id FROM profile_fields WHERE name=? AND id<>?',
+                           (new_name, field_id))
+            if cursor.fetchone():
+                return False
+            cursor.execute('UPDATE profile_fields SET name=? WHERE id=?', (new_name, field_id))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def delete_profile_field(self, field_id: int) -> bool:
+        """删除字段（同时删除该列所有学生的填写值）"""
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute('DELETE FROM profile_values WHERE field_id=?', (field_id,))
+            cursor.execute('DELETE FROM profile_fields WHERE id=?', (field_id,))
+            conn.commit()
+            return cursor.rowcount > 0
+
+    def get_profile_values(self) -> Dict[Tuple[int, int], str]:
+        """全部学情填写值：{(student_id, field_id): value}"""
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT student_id, field_id, value FROM profile_values')
+            return {(r[0], r[1]): (r[2] or '') for r in cursor.fetchall()}
+
+    def set_profile_value(self, student_id: int, field_id: int, value: str) -> bool:
+        """写入/更新某个学生在某字段上的填写值"""
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                INSERT INTO profile_values (student_id, field_id, value, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(student_id, field_id) DO UPDATE SET
+                    value=excluded.value, updated_at=excluded.updated_at
+            ''', (student_id, field_id, value or '', datetime.now().isoformat()))
+            conn.commit()
+            return True
+
+    def get_student_profile(self, student_id: int) -> Dict[str, str]:
+        """某学生的学情档案：{字段名: 值}（对学生/班级磁贴无副作用）"""
+        with self._lock:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            cursor.execute('''
+                SELECT f.name, COALESCE(v.value, '')
+                FROM profile_fields f
+                LEFT JOIN profile_values v
+                       ON v.field_id = f.id AND v.student_id = ?
+                ORDER BY f.position, f.id
+            ''', (student_id,))
+            return {r[0]: (r[1] or '') for r in cursor.fetchall()}
+
+    def get_profile_matrix(self) -> Dict[str, Any]:
+        """整张学情表：字段列表 + 每名学生每列的值（供界面/导出使用）"""
+        fields = self.get_profile_fields()
+        values = self.get_profile_values()
+        students = self.get_all_students()
+        rows = []
+        for s in students:
+            rows.append({
+                'student_id': s.id,
+                'name': s.name,
+                'student_no': s.student_no,
+                'class_name': s.class_name,
+                'values': {f['id']: values.get((s.id, f['id']), '') for f in fields},
+            })
+        return {'fields': fields, 'students': rows}
 
     # ---- 课程操作 ----
     def add_course(self, course: Course) -> int:
@@ -1138,14 +1269,20 @@ class FileImporter:
             if not row or all(v is None or str(v).strip() == '' for v in row):
                 continue
 
-            name = str(row[col_map['name']]).strip() if 'name' in col_map and col_map['name'] < len(row) else ''
+            name = FileImporter._cell_text(
+                row[col_map['name']] if 'name' in col_map and col_map['name'] < len(row) else None)
             if not name:
                 continue
 
-            student_no = str(row[col_map['student_no']]).strip() if 'student_no' in col_map and col_map['student_no'] < len(row) else name
-            class_name = str(row[col_map['class_name']]).strip() if 'class_name' in col_map and col_map['class_name'] < len(row) else ''
-            tags_str = str(row[col_map['tags']]).strip() if 'tags' in col_map and col_map['tags'] < len(row) else ''
-            titles_str = str(row[col_map['titles']]).strip() if 'titles' in col_map and col_map['titles'] < len(row) else ''
+            student_no = FileImporter._cell_text(
+                row[col_map['student_no']] if 'student_no' in col_map and col_map['student_no'] < len(row) else None,
+                default=name)
+            class_name = FileImporter._cell_text(
+                row[col_map['class_name']] if 'class_name' in col_map and col_map['class_name'] < len(row) else None)
+            tags_str = FileImporter._cell_text(
+                row[col_map['tags']] if 'tags' in col_map and col_map['tags'] < len(row) else None)
+            titles_str = FileImporter._cell_text(
+                row[col_map['titles']] if 'titles' in col_map and col_map['titles'] < len(row) else None)
 
             tags = [t.strip() for t in tags_str.replace('，', ',').split(',') if t.strip()] if tags_str else []
             titles = [t.strip() for t in titles_str.replace('，', ',').split(',') if t.strip()] if titles_str else []
@@ -1405,6 +1542,26 @@ class FileImporter:
         return students
 
     @staticmethod
+    def _cell_text(val, default: str = "") -> str:
+        """把 Excel 单元格值转为文本。
+
+        openpyxl 对空单元格返回 None，直接 str() 会得到字符串 'None'
+        （曾导致导入后标签显示为「None」、学号变成「None」）。
+        这里统一把 None/空值转成 default，数字/日期等照常转字符串。
+        """
+        if val is None:
+            return default
+        if isinstance(val, (datetime, date)):
+            return val.strftime("%Y-%m-%d")
+        text = str(val).strip()
+        if not text or text == 'None':
+            return default
+        # Excel 里数值型整数会读成 20260101.0，去掉多余的小数点
+        if re.fullmatch(r'-?\d+\.0', text):
+            text = text[:-2]
+        return text
+
+    @staticmethod
     def _cell_date_text(val, default: str = "") -> str:
         """将 Excel 单元格值规范化为 YYYY-MM-DD 文本。
         Excel 真实日期单元格读出为 datetime/date/时间浮点，直接 str() 会得到
@@ -1470,14 +1627,19 @@ class FileImporter:
             if not row or all(v is None or str(v).strip() == '' for v in row):
                 continue
             try:
-                student_name = str(row[col_map['student_name']]).strip() if col_map['student_name'] < len(row) else ''
+                student_name = FileImporter._cell_text(
+                    row[col_map['student_name']] if col_map['student_name'] < len(row) else None)
                 score = float(row[col_map['score']]) if col_map['score'] < len(row) and row[col_map['score']] is not None else 0
                 if not student_name:
                     continue
-                course_name = str(row[col_map['course_name']]).strip() if 'course_name' in col_map and col_map['course_name'] < len(row) else '未知课程'
+                course_name = FileImporter._cell_text(
+                    row[col_map['course_name']] if 'course_name' in col_map and col_map['course_name'] < len(row) else None,
+                    default='未知课程')
                 raw_date = row[col_map['exam_date']] if 'exam_date' in col_map and col_map['exam_date'] < len(row) else None
                 exam_date = FileImporter._cell_date_text(raw_date, date.today().isoformat())
-                exam_type = str(row[col_map['exam_type']]).strip() if 'exam_type' in col_map and col_map['exam_type'] < len(row) else '其他'
+                exam_type = FileImporter._cell_text(
+                    row[col_map['exam_type']] if 'exam_type' in col_map and col_map['exam_type'] < len(row) else None,
+                    default='其他')
                 full_score = float(row[col_map['full_score']]) if 'full_score' in col_map and col_map['full_score'] < len(row) and row[col_map['full_score']] else 100.0
 
                 grades.append({
@@ -2236,6 +2398,363 @@ class GradeTile(TileWidget):
         menu.addSeparator()
         del_act = menu.addAction("🗑 删除该生全部成绩")
         del_act.triggered.connect(lambda: self.delete_requested.emit(self.data))
+
+
+# ==================== 气泡 / 标签云组件 ====================
+class FlowLayout(QLayout):
+    """流式布局：控件按行排列，放不下自动换行（气泡云的基础）"""
+
+    def __init__(self, parent=None, margin: int = 0, spacing: int = 8):
+        super().__init__(parent)
+        self._items: List[QWidgetItem] = []
+        self.setContentsMargins(margin, margin, margin, margin)
+        self.setSpacing(spacing)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int):
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index: int):
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations(Qt.Orientation(0))
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._do_layout(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect: QRect):
+        super().setGeometry(rect)
+        self._do_layout(rect, test_only=False)
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        size += QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
+        return size
+
+    def _do_layout(self, rect: QRect, test_only: bool) -> int:
+        margins = self.contentsMargins()
+        effective = rect.adjusted(margins.left(), margins.top(),
+                                  -margins.right(), -margins.bottom())
+        x, y, line_height = effective.x(), effective.y(), 0
+        spacing = self.spacing()
+        for item in self._items:
+            hint = item.sizeHint()
+            next_x = x + hint.width() + spacing
+            if next_x - spacing > effective.right() and line_height > 0:
+                x = effective.x()
+                y = y + line_height + spacing
+                next_x = x + hint.width() + spacing
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x = next_x
+            line_height = max(line_height, hint.height())
+        return y + line_height - rect.y() + margins.bottom()
+
+
+class BubbleItem(QFrame):
+    """气泡/标签：按权重显示不同大小与配色（类似 tag cloud）"""
+
+    # 尺寸档位：(字号, 内边距, 圆角)
+    SIZE_CLASSES = {
+        'xl': (22, (18, 10), 20),
+        'l': (17, (15, 8), 17),
+        'm': (14, (12, 7), 14),
+        's': (12, (10, 5), 12),
+        'xs': (11, (8, 4), 10),
+    }
+    # 分类配色（浅底深字，气泡质感）
+    CATEGORY_COLORS = {
+        'identity': ("#E8ECFF", "#3A54D4"),
+        'tag': ("#DFF5E1", "#0F7B5A"),
+        'title': ("#FFF3D6", "#B26A00"),
+        'score': ("#E4F0FF", "#1B67C6"),
+        'subject': ("#F0E4FF", "#6C4BC7"),
+        'warn': ("#FFE6E6", "#C0392B"),
+        'muted': ("#F1F3F5", "#636E72"),
+    }
+
+    def __init__(self, text: str, size_class: str = 'm', category: str = 'muted',
+                 tooltip: str = "", parent=None):
+        super().__init__(parent)
+        self.text = text
+        self.size_class = size_class if size_class in self.SIZE_CLASSES else 'm'
+        self.category = category if category in self.CATEGORY_COLORS else 'muted'
+        font_size, (pad_x, pad_y), radius = self.SIZE_CLASSES[self.size_class]
+        bg, fg = self.CATEGORY_COLORS[self.category]
+
+        self.setStyleSheet(f"""
+            BubbleItem {{
+                background-color: {bg};
+                border: 1px solid {QColor(fg).lighter(160).name()};
+                border-radius: {radius}px;
+            }}
+            BubbleItem:hover {{
+                border: 2px solid {fg};
+                background-color: {QColor(bg).darker(103).name()};
+            }}
+        """)
+        box = QHBoxLayout(self)
+        box.setContentsMargins(pad_x, pad_y, pad_x, pad_y)
+        box.setSpacing(0)
+        label = QLabel(text)
+        label.setStyleSheet(
+            f"QLabel {{ color: {fg}; font-size: {font_size}px; "
+            f"font-weight: {'bold' if self.size_class in ('xl', 'l') else 'normal'}; "
+            f"border: none; background: transparent; font-family: {FONT_STACK_CSS}; }}")
+        box.addWidget(label)
+        if tooltip:
+            self.setToolTip(tooltip)
+            label.setToolTip(tooltip)
+        # 加一点阴影，更像“气泡”
+        shadow = QGraphicsDropShadowEffect(self)
+        shadow.setBlurRadius(10)
+        shadow.setOffset(0, 2)
+        shadow.setColor(QColor(0, 0, 0, 26))
+        self.setGraphicsEffect(shadow)
+        self.setCursor(Qt.WhatsThisCursor if tooltip else Qt.ArrowCursor)
+
+
+class BubbleCloud(QWidget):
+    """气泡云：把若干 BubbleItem 流式排布，支持清空重建"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setStyleSheet("background: transparent;")
+        self._layout = FlowLayout(self, margin=4, spacing=9)
+
+    def clear(self):
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            w = item.widget() if item else None
+            if w:
+                w.hide()
+                w.deleteLater()
+
+    def add_bubble(self, text: str, size_class: str = 'm', category: str = 'muted',
+                   tooltip: str = "") -> BubbleItem:
+        bubble = BubbleItem(text, size_class, category, tooltip, parent=self)
+        self._layout.addWidget(bubble)
+        return bubble
+
+    def add_from_specs(self, specs: List[Dict[str, str]]):
+        """specs: [{'text','size','category','tooltip'}]"""
+        self.clear()
+        for spec in specs:
+            self.add_bubble(spec.get('text', ''), spec.get('size', 'm'),
+                            spec.get('category', 'muted'), spec.get('tooltip', ''))
+        self.updateGeometry()
+
+
+class StudentProfileView(QWidget):
+    """学生资料页（点开学生磁贴后进入）
+
+    把该生**已编辑好的各种信息**以「或大或小的气泡/标签」呈现：
+    身份信息、标签、头衔、成绩统计、各科目表现、最近考试与评语等。
+    气泡大小按重要性/数值自动分档，形成 tag cloud 效果。
+    """
+
+    edit_requested = Signal(object)      # 携带 Student
+    delete_requested = Signal(object)    # 携带 Student
+    detail_requested = Signal(object)    # 携带 Student（打开成绩详情）
+    back_requested = Signal()
+
+    def __init__(self, db: 'DatabaseManager', parent=None):
+        super().__init__(parent)
+        self.db = db
+        self.student: Optional[Student] = None
+        self.setup_ui()
+
+    # ------------------------------------------------------------------ UI
+    def setup_ui(self):
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(8)
+
+        # 顶部：头像 + 姓名 + 操作
+        header = QFrame()
+        header.setStyleSheet(f"""
+            QFrame {{
+                background-color: {COLORS['card_bg']};
+                border: 1px solid {COLORS['border']};
+                border-radius: 14px;
+            }}
+        """)
+        head_row = QHBoxLayout(header)
+        head_row.setContentsMargins(16, 12, 16, 12)
+        head_row.setSpacing(14)
+
+        self.avatar_label = QLabel("?")
+        self.avatar_label.setFixedSize(64, 64)
+        self.avatar_label.setAlignment(Qt.AlignCenter)
+        self.avatar_label.setStyleSheet(
+            f"QLabel {{ background-color: {COLORS['primary']}; color: white; "
+            f"border-radius: 32px; font-size: 26px; font-weight: bold; "
+            f"font-family: {FONT_STACK_CSS}; }}")
+        head_row.addWidget(self.avatar_label)
+
+        name_box = QVBoxLayout()
+        name_box.setSpacing(2)
+        self.name_label = QLabel("—")
+        self.name_label.setStyleSheet(
+            f"font-size: 24px; font-weight: bold; color: {COLORS['text_primary']}; "
+            f"font-family: {FONT_STACK_CSS}; border: none;")
+        name_box.addWidget(self.name_label)
+        self.sub_label = QLabel("")
+        self.sub_label.setStyleSheet(
+            f"font-size: 12px; color: {COLORS['text_secondary']}; "
+            f"font-family: {FONT_STACK_CSS}; border: none;")
+        name_box.addWidget(self.sub_label)
+        head_row.addLayout(name_box, stretch=1)
+
+        for text, color, slot in (
+                ("✏️ 编辑资料", COLORS['primary'], lambda: self.edit_requested.emit(self.student)),
+                ("📈 成绩详情", COLORS['secondary'], lambda: self.detail_requested.emit(self.student)),
+                ("🗑 删除", COLORS['danger'], lambda: self.delete_requested.emit(self.student)),
+        ):
+            btn = QPushButton(text)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {color}; color: white; border: none;
+                    border-radius: 14px; padding: 7px 14px; font-size: 12px;
+                    font-family: {FONT_STACK_CSS};
+                }}
+                QPushButton:hover {{ opacity: 0.85; }}
+            """)
+            btn.clicked.connect(slot)
+            head_row.addWidget(btn)
+
+        outer.addWidget(header)
+
+        # 提示
+        self.hint_label = QLabel("💡 下方气泡展示该学生的各类信息；气泡大小表示重要程度或数值高低")
+        self.hint_label.setStyleSheet(
+            f"font-size: 11px; color: {COLORS['text_secondary']}; "
+            f"font-family: {FONT_STACK_CSS};")
+        outer.addWidget(self.hint_label)
+
+        # 气泡云
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setStyleSheet("QScrollArea { background: transparent; }")
+        self.cloud = BubbleCloud()
+        self.cloud.setStyleSheet(
+            f"BubbleCloud {{ background-color: {COLORS['background']}; "
+            f"border: 1px solid {COLORS['border']}; border-radius: 14px; }}")
+        self.scroll.setWidget(self.cloud)
+        outer.addWidget(self.scroll, stretch=1)
+
+    # --------------------------------------------------------------- 渲染
+    def render(self, student: Optional[Student]):
+        self.student = student
+        if student is None:
+            self.name_label.setText("—")
+            self.cloud.clear()
+            return
+
+        self.avatar_label.setText(student.name[0] if student.name else '?')
+        self.avatar_label.setStyleSheet(
+            f"QLabel {{ background-color: {student.avatar_color or COLORS['primary']}; "
+            f"color: white; border-radius: 32px; font-size: 26px; font-weight: bold; "
+            f"font-family: {FONT_STACK_CSS}; }}")
+        self.name_label.setText(student.name or "（未命名）")
+        self.sub_label.setText(
+            f"学号 {student.student_no}　|　班级 {student.class_name or '未分班'}"
+            f"　|　创建于 {(student.created_at or '')[:10]}")
+
+        grades = self.db.get_grades_by_student(student.id or 0)
+        self.cloud.add_from_specs(self._build_specs(student, grades))
+
+    def _build_specs(self, student: Student, grades: List['Grade']) -> List[Dict[str, str]]:
+        """把学生信息转换为气泡规格（text/size/category/tooltip）"""
+        specs: List[Dict[str, str]] = []
+
+        # 1) 身份
+        specs.append({'text': f"👤 {student.name}", 'size': 'xl', 'category': 'identity',
+                      'tooltip': f"姓名：{student.name}"})
+        specs.append({'text': f"🏫 {student.class_name or '未分班'}", 'size': 'l',
+                      'category': 'identity',
+                      'tooltip': f"班级：{student.class_name or '未分班'}"})
+        specs.append({'text': f"🆔 {student.student_no}", 'size': 'm', 'category': 'identity',
+                      'tooltip': f"学号：{student.student_no}"})
+        specs.append({'text': f"🗓 {len(grades)} 次考试", 'size': 's', 'category': 'muted',
+                      'tooltip': "该生已录入的考试记录条数"})
+
+        # 2) 标签（越多人共有 → 气泡越大，体现班级共性）
+        if student.tags:
+            peers = self.db.get_all_students()
+            same_class = [s for s in peers if s.class_name == student.class_name] or peers
+            total = max(len(same_class), 1)
+            for tag in student.tags:
+                share = sum(1 for s in same_class if tag in (s.tags or [])) / total
+                size = 'l' if share >= 0.3 else ('m' if share >= 0.1 else 's')
+                specs.append({
+                    'text': f"🏷️ {tag}", 'size': size, 'category': 'tag',
+                    'tooltip': f"标签：{tag}（本班 {int(share * 100)}% 的学生拥有）"})
+
+        # 3) 头衔
+        for title in student.titles:
+            specs.append({'text': f"⭐ {title}", 'size': 'l', 'category': 'title',
+                          'tooltip': f"头衔：{title}"})
+
+        # 4) 成绩统计
+        if grades:
+            scores = [g.score for g in grades]
+            avg = sum(scores) / len(scores)
+            best, worst = max(scores), min(scores)
+            subjects = sorted({g.course_name for g in grades})
+            avg_size = 'xl' if avg >= 85 else ('l' if avg >= 70 else 'm')
+            avg_cat = 'score' if avg >= 85 else ('subject' if avg >= 60 else 'warn')
+            specs.append({'text': f"📊 平均 {avg:.1f}", 'size': avg_size, 'category': avg_cat,
+                          'tooltip': f"全部 {len(grades)} 条成绩的平均分"})
+            specs.append({'text': f"⬆️ 最高 {best:.1f}", 'size': 'm', 'category': 'score',
+                          'tooltip': "最高分"})
+            specs.append({'text': f"⬇️ 最低 {worst:.1f}", 'size': 'm', 'category': 'score',
+                          'tooltip': "最低分"})
+
+            # 各科目平均分：按分数分档大小
+            subject_avg: Dict[str, List[float]] = {}
+            for g in grades:
+                subject_avg.setdefault(g.course_name, []).append(g.score)
+            for subject, vals in sorted(subject_avg.items(),
+                                        key=lambda kv: -(sum(kv[1]) / len(kv[1]))):
+                s_avg = sum(vals) / len(vals)
+                size = 'l' if s_avg >= 90 else ('m' if s_avg >= 75 else 's')
+                cat = 'subject' if s_avg >= 75 else ('warn' if s_avg < 60 else 'subject')
+                specs.append({
+                    'text': f"{subject} {s_avg:.0f}", 'size': size, 'category': cat,
+                    'tooltip': f"{subject}：{len(vals)} 次记录，平均 {s_avg:.1f} 分"})
+
+            # 最近考试
+            latest = sorted(grades, key=lambda g: g.exam_date or '')[-1]
+            specs.append({'text': f"🕐 最近 {latest.exam_date} {latest.course_name} "
+                                  f"{latest.score:.0f}",
+                          'size': 's', 'category': 'muted', 'tooltip': "最近一次考试记录"})
+            if latest.comment:
+                specs.append({'text': f"💬 {latest.comment}", 'size': 'm', 'category': 'muted',
+                              'tooltip': "最近一次考试的评语"})
+        else:
+            specs.append({'text': "📭 暂无成绩数据（可在成绩管理导入/录入）", 'size': 'm',
+                          'category': 'muted', 'tooltip': "尚未录入成绩"})
+
+        return specs
 
 
 # ==================== 对话框组件 ====================
@@ -3000,6 +3519,15 @@ class StudentModule(BaseModulePage):
         detail_layout.addWidget(self.student_scroll)
         self.stack.addWidget(self.detail_page)
 
+        # 第 3 级：学生资料页（点开磁贴 → 气泡/标签视图）
+        self.profile_page = StudentProfileView(self.db)
+        self.profile_page.edit_requested.connect(self.on_student_edit)
+        self.profile_page.delete_requested.connect(
+            lambda st: self._confirm_delete_students([st.id]))
+        self.profile_page.detail_requested.connect(
+            lambda st: self.on_student_double_clicked(st))
+        self.stack.addWidget(self.profile_page)
+
         layout.addWidget(self.stack, stretch=1)
 
         # ---- 底部统计 ----
@@ -3064,6 +3592,9 @@ class StudentModule(BaseModulePage):
             return "🏠 班级总览"
         if kind == 'search':
             return f"🔍 搜索：{value}"
+        if kind == 'student':
+            stu = self.db.get_student_by_id(int(value)) if value not in (None, '') else None
+            return f"👤 {stu.name}" if stu else "👤 学生资料"
         return f"📚 {value}"
 
     def _update_nav_bar(self):
@@ -3142,6 +3673,21 @@ class StudentModule(BaseModulePage):
             self._rebuild_class_detail(f"搜索结果 · {value}", results)
             self.stack.setCurrentIndex(1, animate=animate, direction=direction)
             self.title_label.setText(f"👥 搜索结果（{len(results)}）")
+            return
+        if kind == 'student':
+            student = self.db.get_student_by_id(int(value)) if value not in (None, '') else None
+            if student is None:                       # 学生已被删除 → 回到班级总览
+                self._view = ('classes', None)
+                self._history = []
+                self._render_view(self._view, animate=animate, direction=direction)
+                return
+            self.current_class = student.class_name or "未分班"
+            self.profile_page.render(student)
+            self.stack.setCurrentIndex(2, animate=animate, direction=direction)
+            self.title_label.setText(f"👤 {student.name} · 学生资料")
+            self.stats_label.setText(
+                f"{student.name} · 学号 {student.student_no} · "
+                f"成绩 {len(self.db.get_grades_by_student(student.id or 0))} 条")
             return
         # 班级详情
         self.current_class = value
@@ -3294,7 +3840,17 @@ class StudentModule(BaseModulePage):
         self.navigate('search', self._search_keyword, animate=True, direction=1)
 
     def on_student_clicked(self, data):
-        pass
+        """单击学生磁贴 → 进入该生资料页（气泡/标签视图，带过渡动画）"""
+        student = data
+        if student is None or getattr(student, 'id', None) is None:
+            return
+        self.navigate('student', str(student.id), animate=True, direction=1)
+
+    def open_student_profile(self, student: Student):
+        """供外部（测试/其它入口）直接打开学生资料页"""
+        if student is None or student.id is None:
+            return
+        self.navigate('student', str(student.id), animate=True, direction=1)
 
     def on_student_double_clicked(self, data):
         dialog = StudentDetailDialog(data, self.db, self)
@@ -3779,6 +4335,277 @@ class CourseRow(QFrame):
         act_del.triggered.connect(lambda: self.delete_requested.emit(self.course))
         menu.exec(event.globalPos())
         event.accept()
+
+
+class StudentProfileModule(BaseModulePage):
+    """学情管理模块（v1.4.0 新增）
+
+    - **自动读取**已有学员名单，每个学生一行
+    - 以表格形式**自由补充**该生的任何相关信息：可自行添加/重命名/删除字段（列），
+      单元格随改随存
+    - 这里的学情信息**只在本模块使用**，不会出现在「学生管理」的磁贴或资料气泡中
+    - 支持导出 Excel 便于归档
+    """
+
+    BASE_HEADERS = ['姓名', '学号', '班级']
+
+    def __init__(self, db: DatabaseManager, parent=None):
+        super().__init__(db, parent)
+        self.fields: List[Dict[str, Any]] = []
+        self.students: List[Student] = []
+        self._loading = False
+        self._save_count = 0
+
+    # ------------------------------------------------------------------ UI
+    def setup_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 15, 20, 15)
+        layout.setSpacing(10)
+
+        # 顶部工具栏
+        toolbar = QHBoxLayout()
+        title = QLabel("📋 学情管理")
+        title.setStyleSheet(
+            f"font-size: 22px; font-weight: bold; color: {COLORS['text_primary']}; "
+            f"font-family: {FONT_STACK_CSS};")
+        toolbar.addWidget(title)
+
+        sub = QLabel("自动读取学员名单；可自由添加字段并填写任意补充信息（不显示在学生磁贴）")
+        sub.setStyleSheet(
+            f"font-size: 12px; color: {COLORS['text_secondary']}; padding-left: 10px; "
+            f"font-family: {FONT_STACK_CSS};")
+        toolbar.addWidget(sub)
+        toolbar.addStretch()
+
+        self.search_edit = QLineEdit()
+        self.search_edit.setPlaceholderText("按姓名/学号/班级筛选…")
+        self.search_edit.setFixedWidth(200)
+        self.search_edit.textChanged.connect(self.on_search)
+        self.search_edit.setStyleSheet(f"""
+            QLineEdit {{
+                padding: 8px 12px; border: 1px solid {COLORS['border']};
+                border-radius: 18px; font-size: 13px;
+                font-family: {FONT_STACK_CSS}; background-color: {COLORS['card_bg']};
+            }}
+            QLineEdit:focus {{ border-color: {COLORS['primary']}; }}
+        """)
+        toolbar.addWidget(self.search_edit)
+        layout.addLayout(toolbar)
+
+        # 字段操作栏
+        field_bar = QHBoxLayout()
+        field_bar.addWidget(QLabel("字段："))
+        self.field_combo = QComboBox()
+        self.field_combo.setMinimumWidth(160)
+        field_bar.addWidget(self.field_combo)
+
+        for text, color, slot in (
+                ("➕ 添加字段", COLORS['success'], self.add_field),
+                ("✏️ 重命名字段", COLORS['primary'], self.rename_field),
+                ("🗑 删除字段", COLORS['danger'], self.delete_field),
+                ("🔄 刷新名单", COLORS['secondary'], self.refresh),
+                ("📤 导出 Excel", COLORS['info'], self.export_excel),
+        ):
+            btn = QPushButton(text)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setStyleSheet(self._get_btn_style(color))
+            btn.clicked.connect(slot)
+            field_bar.addWidget(btn)
+        field_bar.addStretch()
+        layout.addLayout(field_bar)
+
+        # 表格
+        self.table = QTableWidget(0, len(self.BASE_HEADERS))
+        self.table.setHorizontalHeaderLabels(self.BASE_HEADERS)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setAlternatingRowColors(True)
+        self.table.setEditTriggers(QAbstractItemView.DoubleClicked |
+                                   QAbstractItemView.EditKeyPressed |
+                                   QAbstractItemView.AnyKeyPressed)
+        self.table.setStyleSheet(f"""
+            QTableWidget {{
+                border: 1px solid {COLORS['border']}; border-radius: 10px;
+                font-size: 12px; font-family: {FONT_STACK_CSS};
+                gridline-color: {COLORS['border']};
+            }}
+            QHeaderView::section {{
+                background-color: {COLORS['primary_light']}; font-weight: bold;
+                padding: 6px; border: none;
+            }}
+        """)
+        self.table.cellChanged.connect(self.on_cell_changed)
+        layout.addWidget(self.table, stretch=1)
+
+        # 底部状态
+        self.status_label = QLabel()
+        self.status_label.setStyleSheet(
+            f"font-size: 12px; color: {COLORS['text_secondary']}; "
+            f"font-family: {FONT_STACK_CSS};")
+        layout.addWidget(self.status_label)
+
+        hint = QLabel("💡 提示：绿色单元格可直接编辑并自动保存；这些学情信息仅保存在本模块，"
+                      "不会显示在「学生管理」的学生磁贴中")
+        hint.setStyleSheet(
+            f"font-size: 11px; color: {COLORS['text_secondary']}; "
+            f"font-family: {FONT_STACK_CSS};")
+        layout.addWidget(hint)
+
+    def _get_btn_style(self, color):
+        return f"""
+            QPushButton {{
+                background-color: {color}; color: white; border: none;
+                border-radius: 14px; padding: 7px 13px; font-size: 12px;
+                font-family: {FONT_STACK_CSS}; font-weight: 500;
+            }}
+            QPushButton:hover {{ opacity: 0.85; }}
+        """
+
+    # ------------------------------------------------------------- 数据刷新
+    def refresh(self):
+        """重新读取字段与学员名单（学员名单自动来自学生管理）"""
+        self.fields = self.db.get_profile_fields()
+        self.students = self.db.get_all_students()
+        self._rebuild_table()
+        self._rebuild_field_combo()
+        self._update_status()
+
+    def _rebuild_field_combo(self):
+        current = self.field_combo.currentData()
+        self.field_combo.blockSignals(True)
+        self.field_combo.clear()
+        for f in self.fields:
+            self.field_combo.addItem(f["name"], f["id"])
+        if current is not None:
+            idx = self.field_combo.findData(current)
+            if idx >= 0:
+                self.field_combo.setCurrentIndex(idx)
+        self.field_combo.blockSignals(False)
+
+    def _rebuild_table(self):
+        headers = self.BASE_HEADERS + [f["name"] for f in self.fields]
+        values = self.db.get_profile_values()          # {(student_id, field_id): value}
+
+        self._loading = True
+        self.table.clear()
+        self.table.setColumnCount(len(headers))
+        self.table.setHorizontalHeaderLabels(headers)
+        self.table.setRowCount(len(self.students))
+        for row, stu in enumerate(self.students):
+            for col, text in enumerate((stu.name, stu.student_no, stu.class_name)):
+                item = QTableWidgetItem(text or '')
+                item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+                item.setForeground(QColor(COLORS['text_secondary']))
+                item.setData(Qt.UserRole, stu.id)
+                self.table.setItem(row, col, item)
+            for i, field in enumerate(self.fields):
+                col = len(self.BASE_HEADERS) + i
+                value = values.get((stu.id, field['id']), '')
+                cell = QTableWidgetItem(value)
+                cell.setData(Qt.UserRole, stu.id)
+                cell.setData(Qt.UserRole + 1, field['id'])
+                cell.setBackground(QColor('#F6FFF9'))
+                self.table.setItem(row, col, cell)
+        self.table.resizeColumnsToContents()
+        self._loading = False
+
+    def _update_status(self):
+        filled = sum(1 for v in self.db.get_profile_values().values() if str(v).strip())
+        self.status_label.setText(
+            f"共 {len(self.students)} 名学生 · {len(self.fields)} 个学情字段 · "
+            f"已填写 {filled} 项　（自动保存 {self._save_count} 次）")
+
+    # ------------------------------------------------------------- 交互
+    def on_search(self, keyword: str):
+        kw = keyword.strip().lower()
+        for row in range(self.table.rowCount()):
+            text = " ".join(
+                self.table.item(row, c).text() if self.table.item(row, c) else ''
+                for c in range(self.table.columnCount()))
+            self.table.setRowHidden(row, bool(kw) and kw not in text.lower())
+
+    def on_cell_changed(self, row: int, col: int):
+        """单元格编辑 → 立即写入数据库"""
+        if self._loading or col < len(self.BASE_HEADERS):
+            return
+        cell = self.table.item(row, col)
+        if cell is None:
+            return
+        student_id = cell.data(Qt.UserRole)
+        field_id = cell.data(Qt.UserRole + 1)
+        if student_id is None or field_id is None:
+            return
+        self.db.set_profile_value(int(student_id), int(field_id), cell.text())
+        self._save_count += 1
+        self._update_status()
+
+    def add_field(self):
+        name, ok = QInputDialog.getText(
+            self, "添加学情字段", "新字段名称（例如：家庭情况 / 薄弱科目 / 家长电话）：",
+            QLineEdit.Normal, "")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        existed = any(f['name'] == name for f in self.fields)
+        field_id = self.db.add_profile_field(name)
+        self.refresh()
+        if field_id is None:
+            QMessageBox.warning(self, "提示", "字段名无效")
+        elif existed:
+            QMessageBox.information(self, "提示", f"字段「{name}」已存在，已为你选中该列")
+    def rename_field(self):
+        field_id = self.field_combo.currentData()
+        if field_id is None:
+            QMessageBox.information(self, "提示", "请先添加并选择一个字段")
+            return
+        old_name = self.field_combo.currentText()
+        name, ok = QInputDialog.getText(
+            self, "重命名字段", f"把「{old_name}」重命名为：", QLineEdit.Normal, old_name)
+        if not ok or not name.strip() or name.strip() == old_name:
+            return
+        if self.db.rename_profile_field(int(field_id), name.strip()):
+            self.refresh()
+        else:
+            QMessageBox.warning(self, "提示", f"字段「{name.strip()}」已存在")
+
+    def delete_field(self):
+        field_id = self.field_combo.currentData()
+        if field_id is None:
+            QMessageBox.information(self, "提示", "请先添加并选择一个字段")
+            return
+        name = self.field_combo.currentText()
+        reply = QMessageBox.question(
+            self, "确认删除",
+            f"确定删除字段「{name}」吗？\n该列所有学生已填写的内容都会一并删除，且不可恢复！",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.db.delete_profile_field(int(field_id))
+            self.refresh()
+
+    def export_excel(self):
+        """导出整张学情表为 xlsx"""
+        matrix = self.db.get_profile_matrix()
+        if not matrix['students']:
+            QMessageBox.information(self, "提示", "暂无学生数据可导出")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出学情表", "学情表.xlsx", "Excel 文件 (*.xlsx)")
+        if not path:
+            return
+        try:
+            from openpyxl import Workbook
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "学情表"
+            headers = self.BASE_HEADERS + [f['name'] for f in matrix['fields']]
+            ws.append(headers)
+            for row in matrix['students']:
+                ws.append([row['name'], row['student_no'], row['class_name']] +
+                          [row['values'].get(f['id'], '') for f in matrix['fields']])
+            wb.save(path)
+            QMessageBox.information(self, "导出成功", f"已导出到：\n{path}")
+        except Exception as e:
+            QMessageBox.warning(self, "导出失败", str(e))
 
 
 class CourseModule(BaseModulePage):
@@ -5678,6 +6505,7 @@ class MainWindow(QMainWindow):
             ("📅", "课程管理", 1),
             ("💬", "反馈系统", 2),
             ("📊", "成绩管理", 3),
+            ("📋", "学情管理", 4),
         ]
 
         for icon, text, index in nav_items:
@@ -5707,11 +6535,13 @@ class MainWindow(QMainWindow):
         self.course_module = CourseModule(self.db)
         self.feedback_module = FeedbackModule(self.db)
         self.grade_module = GradeModule(self.db)
+        self.profile_module = StudentProfileModule(self.db)
 
         self.content_stack.addWidget(self.student_module)
         self.content_stack.addWidget(self.course_module)
         self.content_stack.addWidget(self.feedback_module)
         self.content_stack.addWidget(self.grade_module)
+        self.content_stack.addWidget(self.profile_module)
 
         # 默认选中第一个
         self.nav_buttons[0].setChecked(True)
@@ -5788,9 +6618,11 @@ class MainWindow(QMainWindow):
             self.feedback_module.refresh()
         elif index == 3:
             self.grade_module.refresh()
+        elif index == 4:
+            self.profile_module.refresh()
 
         # 更新状态栏
-        module_names = ["学生管理系统", "课程管理系统", "反馈系统", "成绩管理系统"]
+        module_names = ["学生管理系统", "课程管理系统", "反馈系统", "成绩管理系统", "学情管理"]
         self.statusBar().showMessage(f"当前模块：{module_names[index]}")
 
     def refresh_all(self):
@@ -5799,6 +6631,7 @@ class MainWindow(QMainWindow):
         self.course_module.refresh()
         self.feedback_module.refresh()
         self.grade_module.refresh()
+        self.profile_module.refresh()
 
     def apply_styles(self):
         """应用全局样式"""
