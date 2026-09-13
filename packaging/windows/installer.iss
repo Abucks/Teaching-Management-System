@@ -1,20 +1,23 @@
 ; Inno Setup 脚本：生成 Windows 安装程序 Setup.exe
 ; 由 GitHub Actions 的 build-installers 工作流调用（需先安装 Inno Setup 6）
 ;
+; 注意：Inno 中相对路径是**相对本 .iss 文件所在目录**解析的，
+;       所以下面的默认值用 SourcePath（脚本所在目录）拼出绝对路径。
+;
 ; 本地手动编译：
-;   iscc /DAppVersion=1.4.0 /DSourceExe=dist\TeachingManager.exe packaging\windows\installer.iss
+;   iscc /DAppVersion=1.4.0 packaging\windows\installer.iss
 
 #ifndef AppVersion
   #define AppVersion "1.4.0"
 #endif
 #ifndef SourceExe
-  #define SourceExe "..\..\dist\TeachingManager.exe"
+  #define SourceExe AddBackslash(SourcePath) + "..\..\dist\TeachingManager.exe"
 #endif
 #ifndef OutputDir
-  #define OutputDir "..\..\dist\installers"
+  #define OutputDir AddBackslash(SourcePath) + "..\..\dist\installers"
 #endif
 #ifndef OutputBase
-  #define OutputBase "TeachingManager-windows-x64-setup"
+  #define OutputBase "TeachingManager-" + AppVersion + "-windows-x64-setup"
 #endif
 
 [Setup]

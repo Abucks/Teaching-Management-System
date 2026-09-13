@@ -69,11 +69,14 @@ jobs:
         run: |
           choco install innosetup --no-progress -y | Out-Null
           $iscc = "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe"
+          $root = (Get-Location).Path
+          New-Item -ItemType Directory -Force "$root\dist\installers" | Out-Null
+          # Inno 相对路径基于 .iss 所在目录，这里显式传绝对路径
           & $iscc "/DAppVersion=${{ needs.meta.outputs.version }}" `
-                  "/DSourceExe=dist\TeachingManager.exe" `
-                  "/DOutputDir=dist\installers" `
+                  "/DSourceExe=$root\dist\TeachingManager.exe" `
+                  "/DOutputDir=$root\dist\installers" `
                   "/DOutputBase=TeachingManager-${{ needs.meta.outputs.version }}-windows-x64-setup-${{ needs.meta.outputs.stamp }}" `
-                  packaging\windows\installer.iss
+                  "$root\packaging\windows\installer.iss"
           if ($LASTEXITCODE -ne 0) { throw "Inno Setup 编译失败" }
 
       - name: 构建 MSI（WiX Toolset v5）
@@ -81,11 +84,13 @@ jobs:
         run: |
           dotnet tool install --global wix | Out-Null
           $wix = "$env:USERPROFILE\.dotnet\tools\wix.exe"
-          New-Item -ItemType Directory -Force dist\installers | Out-Null
-          & $wix build packaging\windows\installer.wxs `
-              -d "SourceExe=dist\TeachingManager.exe" `
+          $root = (Get-Location).Path
+          New-Item -ItemType Directory -Force "$root\dist\installers" | Out-Null
+          & $wix build "$root\packaging\windows\installer.wxs" `
+              -arch x64 `
+              -d "SourceExe=$root\dist\TeachingManager.exe" `
               -d "AppVersion=${{ needs.meta.outputs.version }}" `
-              -o "dist\installers\TeachingManager-${{ needs.meta.outputs.version }}-windows-x64-${{ needs.meta.outputs.stamp }}.msi"
+              -o "$root\dist\installers\TeachingManager-${{ needs.meta.outputs.version }}-windows-x64-${{ needs.meta.outputs.stamp }}.msi"
           if ($LASTEXITCODE -ne 0) { throw "WiX 构建失败" }
 
       - name: 重命名便携版（带版本与时间戳）
