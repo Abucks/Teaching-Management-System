@@ -40,6 +40,15 @@
 
 ### 🟢 工程
 
+- **新增多系统安装包流水线**：打 `v*` 标签自动构建并发布 Release
+  - Windows：Inno Setup 安装向导(**Setup.exe**，按用户安装免管理员) +
+    **MSI**（Python 标准库 msilib 生成，装 Program Files，支持主版本升级/阻止降级）+
+    便携版 exe
+  - macOS：`macos-14`(arm64) 与 `macos-15-intel`(x64) 双架构 DMG
+  - Linux：**deb**(dpkg-deb) + **AppImage**(appimagetool)
+  - 产物命名统一为 `TeachingManager-<版本>-<系统>-<架构>-<类型>-<UTC时间戳>`
+  - 注：MSI 不用 WiX —— `dotnet tool install wix` 会装 v7，v7 要求接受 OSMF EULA，
+    CI 上直接报 WIX7015；改用 Python 标准库 msilib 零依赖生成
 - 新增学情数据表 `profile_fields` / `profile_values`（含索引），老数据库自动建表
 - 测试规模提升至 **108 项逻辑 + 29 项界面/新功能 + 跨平台与防回归约束**，
   其中包含「学情信息不得出现在学生磁贴/气泡中」的**模块隔离回归测试**

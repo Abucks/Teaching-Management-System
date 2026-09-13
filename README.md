@@ -32,6 +32,29 @@
 
 ---
 
+## 📥 下载安装包（多系统，7 个）
+
+前往 **[Releases](https://github.com/Abucks/Teaching-Management-System/releases/latest)** 下载。
+命名规则：`TeachingManager-<版本>-<系统>-<架构>-<类型>-<UTC时间戳>`
+（例：`TeachingManager-1.4.0-windows-x64-setup-20260913-0428.exe`）
+
+| 平台 | 文件 | 类型 | 安装方式 |
+|---|---|---|---|
+| **Windows** | `*-windows-x64-setup-*.exe` | 安装向导（Inno Setup） | **推荐**：双击安装，**按用户安装、无需管理员**；自动建开始菜单，可选桌面快捷方式，自带卸载器 |
+| **Windows** | `*-windows-x64-*.msi` | MSI | 双击安装（会弹 UAC 授权），装到 `C:\Program Files\TeachingManager`；适合企业批量分发/组策略；支持升级覆盖与阻止降级 |
+| **Windows** | `*-windows-x64-portable-*.exe` | 免安装便携版 | 双击即用，可放 U 盘 |
+| **macOS** | `*-macos-arm64-*.dmg` | DMG | Apple 芯片（M 系列）：打开 DMG → 拖入「应用程序」 |
+| **macOS** | `*-macos-x64-*.dmg` | DMG | Intel 芯片：同上 |
+| **Linux** | `*-linux-x64-*.deb` | DEB | `sudo apt install ./TeachingManager-*.deb`（Ubuntu/Debian） |
+| **Linux** | `*-linux-x64-*.AppImage` | AppImage | `chmod +x TeachingManager-*.AppImage && ./TeachingManager-*.AppImage` |
+
+> 所有安装包由 `Build installers` 工作流在 **Windows / macOS(arm64+x64) / Linux** 上自动构建，
+> 打 `v*` 标签即发布（见 `.github/workflows/build-installers.yml`）。
+> 详细构建与本地验证方法见 [`packaging/windows/README.md`](packaging/windows/README.md)
+> 与 [`packaging/macos/README-macOS.md`](packaging/macos/README-macOS.md)。
+
+---
+
 ## ✨ 重点特性
 
 - 🫧 **学生磁贴点开即看「气泡资料页」**（v1.4.0）：单击学生磁贴滑入该生资料页，身份 / 标签 / 头衔 / 成绩统计 / 各科目表现以**或大或小的气泡标签云**铺开——姓名最大、**本班拥有该标签的人越多气泡越大**、平均分与科目分按分数档放大缩小，悬停即见明细
