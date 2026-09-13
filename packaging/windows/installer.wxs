@@ -1,0 +1,47 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WiX v4/v5 安装包定义：生成 Windows MSI
+  由 GitHub Actions 的 build-installers 工作流调用：
+    wix build packaging/windows/installer.wxs -d SourceExe=<exe路径> -d AppVersion=1.4.0 -o <输出.msi>
+-->
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+      Name="教学管理系统"
+      Manufacturer="Asell Bucks"
+      Version="$(AppVersion)"
+      UpgradeCode="b2c4a1f6-9d3e-4a58-8f7c-1e6d4b0a92f3"
+      Scope="perMachine"
+      Compressed="yes"
+      Language="2052">
+
+    <SummaryInformation Description="教学管理系统（Teaching Management System）安装包" />
+    <MajorUpgrade DowngradeErrorMessage="已安装更高版本的 教学管理系统，无需重复安装。" />
+    <MediaTemplate EmbedCab="yes" />
+
+    <!-- 安装目录：C:\Program Files\TeachingManager -->
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="TeachingManager">
+        <Component Id="MainExecutable" Guid="*">
+          <File Id="TeachingManagerExe" Source="$(SourceExe)" KeyPath="yes">
+            <Shortcut Id="StartMenuShortcut"
+                      Directory="ProgramMenuDir"
+                      Name="教学管理系统"
+                      WorkingDirectory="INSTALLFOLDER"
+                      Advertise="yes" />
+            <Shortcut Id="DesktopShortcut"
+                      Directory="DesktopFolder"
+                      Name="教学管理系统"
+                      WorkingDirectory="INSTALLFOLDER"
+                      Advertise="yes" />
+          </File>
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <!-- 开始菜单文件夹 -->
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="ProgramMenuDir" Name="教学管理系统" />
+    </StandardDirectory>
+
+  </Package>
+</Wix>
